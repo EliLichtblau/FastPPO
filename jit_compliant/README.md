@@ -13,3 +13,17 @@ JIT_ENV:
     RotatorWorldEnvironment:
         TODO:
             Test if step is actually jitted
+
+
+
+JIT_ACTOR_CRITIC:
+        ActorCritic:
+                Forward:
+                        20k steps:
+                                not jit -> 8.5 seconds
+                                jit -> 5.1 seconds
+                evaluate_actions:
+                        20k steps:
+                                not jit -> 8.2 seconds
+                                jit -> 5 seconds
+                                

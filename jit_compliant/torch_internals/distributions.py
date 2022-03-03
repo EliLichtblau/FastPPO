@@ -7,7 +7,8 @@ from torch.distributions.exp_family import ExponentialFamily
 from torch.distributions import constraints
 import math
 
-from torch.distributions.utils import _standard_normal
+from typing import List
+
 
 def broadcast_all(*values):
     r"""
@@ -139,6 +140,8 @@ class Normal(ExponentialFamily):
 
 import warnings
 
+'''
+
 @torch.jit.script
 class Distribution(object):
     has_rsample: bool = False
@@ -188,3 +191,170 @@ class Distribution(object):
     @property
     def arg_constraits(self) -> Dict[str, constraints.Constraint]:
         raise NotImplementedError
+
+
+'''
+
+
+
+from typing import Tuple
+@torch.jit.script
+def _broadcast_shape_two_tensors(shape_a: List[int], shape_b: List[int]) -> Tuple[bool, List[int]]:
+    shape = list(range(len(shape_a)))
+    if len(shape_a) != len(shape_b):
+        return False, shape
+
+    
+    for i, (a,b) in enumerate(zip(shape_a, shape_b)):
+        if a != b:
+            if a !=1 and b != 1:
+                return False, shape
+        shape[i] = a
+        if a == 1:
+            shape[i] = b
+    return True, shape 
+
+@torch.jit.script
+def _broadcast_shape_over_list(tensor_list: List[torch.Tensor]) -> List[int]:
+    shape: Optional[List[int]] = None
+    for tensor in tensor_list:
+        if shape is None:
+            shape = list(tensor.shape)
+        #print(shape)
+        broadcastable, shape = _broadcast_shape_two_tensors(shape, tensor.shape)
+        if broadcastable is False:
+            raise ValueError("Passed Tensors not broadcastable")
+    
+    if shape is None:
+        raise ValueError("Whatever you passed is garbadge")
+    return shape
+
+
+# TODO: optimize this terrible function
+@torch.jit.script
+def broadcast_tensors(tensor_list: List[torch.Tensor]) -> List[torch.Tensor]:
+    shape = _broadcast_shape_over_list(tensor_list)
+    return [torch.broadcast_to(tensor, shape) for tensor in tensor_list]
+
+
+@torch.jit.script
+def _standard_normal(shape: List[int], dtype: torch.dtype, device: torch.device):
+    if torch._C._get_tracing_state():
+        # [JIT WORKAROUND] lack of support for .normal_()
+        return torch.normal(torch.zeros(shape, dtype=dtype, device=device),
+                            torch.ones(shape, dtype=dtype, device=device))
+    return torch.empty(shape, dtype=dtype, device=device).normal_()
+
+
+
+@torch.jit.script
+class Normal:
+
+    # torch.Size not implemented
+    def __init__(self, 
+            loc: torch.Tensor,
+            scale: torch.Tensor
+            ):
+        
+
+        # yea so like this is fine because its an init and who cares
+        if isinstance(loc, Number):
+            loc = torch.tensor(loc)
+        if isinstance(scale, Number):
+            scale = torch.tensor(scale)
+        
+        self.loc, self.scale = broadcast_tensors([loc, scale])
+        batch_shape = self.loc.size()
+        event_shape: List[int] = []
+
+        # Normal init
+        self._batch_shape = batch_shape
+        self._event_shape = event_shape
+        #self._event_shape = event_shape
+
+
+    @property
+    def mean(self):
+        return self.loc
+
+    @property
+    def variance(self) -> torch.Tensor:
+        return self.stddev.pow(2)
+    
+    @property
+    def stddev(self):
+        return self.scale
+
+
+    
+    # not doing anything smart yet
+    def expand(self, batch_shape: torch.Tensor):
+        #new = torch.jit.script(Normal)
+        new_loc = self.loc.expand(batch_shape)
+        new_scale = self.scale.expand(batch_shape)
+        return Normal(new_loc, new_scale) # i can't torch jit this unfortunately... this might be a preformance problem at some point
+    
+   
+    
+    def sample(self, sample_shape: Optional[List[int]] = None ):
+        if sample_shape is None:
+            a: List[int] = []
+            sample_shape = a
+        shape = self._extended_shape(sample_shape)
+        with torch.no_grad():
+            return torch.normal(self.loc.expand(shape), self.scale.expand(shape))
+
+    def _extended_shape(self, sample_shape: List[int]) -> List[int]:
+        return sample_shape + self._batch_shape + self._event_shape
+        #return sample_shape + list(self._batch_shape) + self._event_shape
+    
+
+    def rsample(self, sample_shape: Optional[List[int]] = None):
+        if sample_shape is None:
+            a: list[int] = []
+            sample_shape = a
+        shape = self._extended_shape(sample_shape) # yes this is aids torchscript doesn't support Size()
+        eps = _standard_normal(shape, dtype=self.loc.dtype, device=self.loc.device)
+        return self.loc + eps * self.scale
+
+    def log_prob(self, value: torch.Tensor):
+        # compute the variance
+        var = (self.scale ** 2)
+        log_scale = self.scale.log()
+        #return -((value - self.loc) ** 2) / (2 * var) - log_scale - math.log(math.sqrt(2 * math.pi))
+        return -((value - self.loc) ** 2) / (2 * var) - log_scale - torch.log(torch.sqrt(2 * torch.pi))
+
+    def cdf(self, value):
+        return 0.5 * (1 + torch.erf((value - self.loc) * self.scale.reciprocal() / torch.sqrt(2)))
+    
+
+    def icdf(self, value):
+        return self.loc + self.scale * torch.erfinv(2 * value - 1) * torch.sqrt(2)
+
+    def entropy(self):
+        return 0.5 + 0.5 * math.log(2 * math.pi) + torch.log(self.scale)
+
+    @property
+    def _natural_params(self):
+        return (self.loc / self.scale.pow(2), -0.5 * self.scale.pow(2).reciprocal())
+
+    def _log_normalizer(self, x: torch.Tensor, y: torch.Tensor):
+        return -0.25 * x.pow(2) / y + 0.5 * torch.log(-math.pi / y)
+
+    @property
+    def batch_shape(self):
+        return self._batch_shape
+    
+    @property
+    def event_shape(self):
+        return self._event_shape
+    
+    
+
+
+    # Normal methods
+
+
+if __name__ == "__main__":
+    n = torch.jit.script(Normal(0.50, .1))
+    pass

@@ -121,14 +121,30 @@ class ActorCriticPolicy(torch.nn.Module):
         values = self.value_net(latent_vf)
         #breakpoint()
         distribution = self._get_action_dist_from_latent(latent_pi)
-        #actions = distribution.get_actions(deterministic=deterministic)
-        #log_prob = distribution.log_prob(actions)
-        return features #actions, values, log_prob
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        return actions, values, log_prob
 
 
 
+    @torch.jit.export
+    def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Evaluate actions according to the current policy,
+        given the observations.
 
-
+        :param obs:
+        :param actions:
+        :return: estimated value, log likelihood of taking those actions
+            and entropy of the action distribution.
+        """
+        features = self.extract_features(obs)
+        #breakpoint()
+        latent_pi, latent_vf = self.mlp_extractor(obs)
+        distribution = self._get_action_dist_from_latent(latent_pi)
+        log_prob = distribution.log_prob(actions)
+        values = self.value_net(latent_vf)
+        return values, log_prob, distribution.entropy()
 
 
 
@@ -155,9 +171,39 @@ class ActorCriticPolicy(torch.nn.Module):
         return self.action_dist.proba_distribution(mean_actions, self.log_std)
         #return mean_actions
 
+    def get_distribution(self, obs: torch.Tensor) -> DiagGaussianDistribution:
+        """
+        Get the current policy distribution given the observations.
+
+        :param obs:
+        :return: the action distribution.
+        """
+        features = self.extract_features(obs)
+        latent_pi = self.mlp_extractor.forward_actor(features)
+        return self._get_action_dist_from_latent(latent_pi)
+
+    
+    def predict_values(self, obs: torch.Tensor) -> torch.Tensor:
+        """
+        Get the estimated values according to the current policy given the observations.
+
+        :param obs:
+        :return: the estimated values.
+        """
+        features = self.extract_features(obs)
+        latent_vf = self.mlp_extractor.forward_critic(features)
+        return self.value_net(latent_vf)
 
 
+    def set_training_mode(self, mode: bool) -> None:
+        """
+        Put the policy in either training or evaluation mode.
 
+        This affects certain modules, such as batch normalisation and dropout.
+
+        :param mode: if true, set to training mode, else set to evaluation mode
+        """
+        self.train(mode)
 
 
     @staticmethod
@@ -172,14 +218,38 @@ class ActorCriticPolicy(torch.nn.Module):
 
 
 
+
+def collect_rollouts(actorcritic, last_obs):
+    
+    for i in range(2048):
+        with torch.no_grad():
+            # we return a tensor already aint that nice 
+            actions, values, log_probs = actorcritic.forward(last_obs)
+        clipped_actions = torch.clip(actions, actorcritic.environment.action_space.low, actorcritic.environment.action_space.high)
+            
+        #new_obs, global_reward, done = actorcritic.environment.step(actions)
+
+        #last_obs = new_obs
+
+
+
 if __name__ == "__main__":
     #env = torch.jit.script(RotatorEnvironmentJit())
     lr_schedule: Schedule = get_schedule_fn(0.1)
-    m = torch.jit.script(ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule))
-    #m = ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule)
+    m = torch.jit.script(ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule)) #20k -> 5.1 seconds with jit
+    #m = ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule) #20k -> 8.5
     print("Starting")
+    obs = m.environment.world.observation()
+    actions, _, _ = m(obs)
     import time
     s = time.time()
-    for _ in range(50_000):
-        m.environment.world.step()
+    #for _ in range(20_000):
+    #    m.evaluate_actions(obs, actions)
+    collect_rollouts(m, obs)
     print(f"Time: {time.time() - s}")
+    obs = m.environment.world.observation()
+
+
+
+
+    breakpoint()

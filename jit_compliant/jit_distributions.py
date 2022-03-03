@@ -4,7 +4,7 @@ from typing import Union, Tuple, Optional
 import torch
 from torch import nn
 from typing import Dict, Any
-from torch_internals import Normal
+from torch_internals.distributions import Normal
 
 
 
@@ -40,7 +40,9 @@ def sum_independent_dims(tensor: torch.Tensor) -> torch.Tensor:
 
 
 
-class DiagGaussianDistribution(nn.Module):
+
+
+class DiagGaussianDistribution(torch.nn.Module):
     """
     Gaussian distribution with diagonal covariance matrix, for continuous actions.
 
@@ -50,14 +52,13 @@ class DiagGaussianDistribution(nn.Module):
     def __init__(self, action_dim: int):
         super(DiagGaussianDistribution, self).__init__()
         self.action_dim = action_dim
-
+        self.distribution = Normal(torch.tensor(5), torch.tensor(5)) # allocate the space
         #self.mean_actions = nn.Linear(latent_dim, self.action_dim)
         #self.log_std = nn.Parameter(torch.ones(self.action_dim) * log_std_init, requires_grad=True)
         #self.mean_actions = None
         #self.log_std = None
-        self.distribution = Normal(10, 5)
 
-    
+
     
     
     
@@ -71,7 +72,6 @@ class DiagGaussianDistribution(nn.Module):
         :param log_std_init: Initial value for the log standard deviation
         :return:
         """
-        
         
         mean_actions = nn.Linear(latent_dim, self.action_dim)
         # TODO: allow action dependent std
@@ -96,7 +96,8 @@ class DiagGaussianDistribution(nn.Module):
         action_std = torch.ones_like(mean_actions) * log_std.exp()
         self.distribution = Normal(mean_actions, action_std)
         return self
-    '''
+    
+    @torch.jit.export
     def log_prob(self, actions: torch.Tensor) -> torch.Tensor:
         """
         Get the log probabilities of actions according to the distribution.
@@ -108,12 +109,13 @@ class DiagGaussianDistribution(nn.Module):
         log_prob = self.distribution.log_prob(actions)
         return sum_independent_dims(log_prob)
 
+    @torch.jit.export
     def entropy(self) -> torch.Tensor:
         return sum_independent_dims(self.distribution.entropy())
 
     def sample(self) -> torch.Tensor:
         # Reparametrization trick to pass gradients
-        return self.distribution.rsample()
+        return self.distribution.rsample() 
 
     def mode(self) -> torch.Tensor:
         return self.distribution.mean
@@ -135,7 +137,8 @@ class DiagGaussianDistribution(nn.Module):
         actions = self.actions_from_params(mean_actions, log_std)
         log_prob = self.log_prob(actions)
         return actions, log_prob
-
+    
+    @torch.jit.export
     def get_actions(self, deterministic: bool = False) -> torch.Tensor:
         """
         Return actions according to the probability distribution.
@@ -146,9 +149,6 @@ class DiagGaussianDistribution(nn.Module):
         if deterministic:
             return self.mode()
         return self.sample()
-    '''
-    
-
         
 if __name__ == "__main__":
-    d = DiagGaussianDistribution(10)
+    d = torch.jit.script(DiagGaussianDistribution(10))
