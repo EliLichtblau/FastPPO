@@ -6,7 +6,6 @@ import numpy as np
 
 @torch.jit.script
 class RotatorWorldJit:
-    @torch.jit.export
     def __init__(self, n_agents: int, n_landmarks: int, use_gpu: bool=True):
         # Set device
         self.device: torch.device = torch.device("cuda") if use_gpu else torch.device("cpu")
@@ -55,8 +54,7 @@ class RotatorWorldJit:
 
         # we do not want to recompute at every call to global_reward
         self.movables_mask: torch.Tensor = torch.logical_xor(self.movables, torch.logical_not(self.movables.T))
-
-    @torch.jit.export
+        self.tmp = torch.zeros((10,10))
     def step(self) -> None:
         """
         Steps all agents, its pretty inefficient rn, need to do less reshapes because that'll
@@ -73,26 +71,32 @@ class RotatorWorldJit:
         dist_matrix = torch.cdist(self.positions, self.positions, p=2.0)
         #breakpoint()
         #self.mem("dist_matrix")   
-        collisions = dist_matrix < self.size_matrix # TODO: Handle Diagonal bug
+        
+        #collisions = dist_matrix < self.size_matrix # TODO: Handle Diagonal bug
         #collisions = self.inv_eye * collisions 
+        
+        
         #breakpoint()
         #self.mem("collisions")     
         # Step 3: calculate collision forces .... the * self.inv_eye is to mask away the diagonal... solves nan problems
-        penetrations: torch.Tensor = torch.log(1 + torch.exp(-(dist_matrix - self.size_matrix)*self.inv_eye / self.contact_margin)) * self.contact_margin * collisions
+        #penetrations: torch.Tensor = torch.log_(1 + torch.exp(-(dist_matrix - self.size_matrix)*self.inv_eye / self.contact_margin)) * self.contact_margin * collisions
+        #penetrations = -(dist_matrix - self.size_matrix)/self.contact_margin
+        self.tmp = dist_matrix
+        #print(self.tmp)
         #breakpoint()
         #self.mem("penetrations") 
-        forces_s: torch.Tensor = self.contact_force * penetrations * collisions
+        #forces_s: torch.Tensor = self.contact_force * penetrations * collisions
         #breakpoint()
         # Need better way of calculating this
         #self.mem("forces_s") 
-        diff_matrix: torch.Tensor = self.positions[:, None, :] - self.positions
+        #diff_matrix: torch.Tensor = self.positions[:, None, :] - self.positions
         #breakpoint()
         #self.mem("diff_matrix") 
-        forces_v = diff_matrix * forces_s[..., None]
+        #forces_v = diff_matrix * forces_s[..., None]
         #breakpoint()
         #self.mem("forces_v") 
         # Step 4: Integrate collision forces
-        self.velocities += forces_v.sum(dim=0)[:self.n_agents, :] * self.dt
+        #self.velocities += forces_v.sum(dim=0)[:self.n_agents, :] * self.dt
         #breakpoint()
         
         #self.velocities[self.n_agents:, :] = 0 # landmarks shouldn't have speed
@@ -100,7 +104,7 @@ class RotatorWorldJit:
         # Step 5: Handle damping... not going to damp for now
         # self.velocities -= self.velocities * (1 - self.damping) 
         # Step 6: Integrate position
-        self.positions[:self.n_agents, :] += self.velocities * self.dt
+        #self.positions[:self.n_agents, :] += self.velocities * self.dt
         
      
     
@@ -116,7 +120,6 @@ class RotatorWorldJit:
         return self.positions[:self.n_agents, :]
     
 
-    @torch.jit.export
     def observation(self):
         """
         Returns tensor containing:
@@ -143,7 +146,6 @@ class RotatorWorldJit:
     
 
     # No need for random seed
-    @torch.jit.export
     def reset(self) -> None:
         # Prolly should put range of numbers here
         self.positions = torch.randn(self.positions.shape, device=self.device)
@@ -155,7 +157,6 @@ class RotatorWorldJit:
     
     # I actually want reward to be defined by world type
     # also this implementation is just a tad stupid but whatever
-    @torch.jit.export
     def global_reward(self):
         headings: torch.Tensor = torch.cat([self.ctrl_thetas, self.ctrl_speeds], dim=1)
         headpos = self.positions[:, :]
@@ -178,12 +179,11 @@ class RotatorWorldJit:
 
 
 
-
-class RotatorEnvironmentJit(torch.jit.ScriptModule):
-    @torch.jit.export
+@torch.jit.script
+class RotatorEnvironmentJit:
     def __init__(self):
-        super().__init__()
-        self.world: RotatorWorldJit = torch.jit.script(RotatorWorldJit(5,1, True))
+        self.world: RotatorWorldJit = RotatorWorldJit(5,1, True)
+        #print(self.world)
         self.device: torch.device = torch.device("cuda")
         self.n_agents: int = self.world.n_agents
         self.n_observations_per_agent: int = 12 # do this but smarter later
@@ -227,7 +227,6 @@ class RotatorEnvironmentJit(torch.jit.ScriptModule):
     """
     just returns observations and rewards after stepping the world
     """
-    @torch.jit.export
     def step(self, actions):
         # I'm not copying atm... this might cause really bad bugs we will see
         #breakpoint()
@@ -239,7 +238,6 @@ class RotatorEnvironmentJit(torch.jit.ScriptModule):
         self.current_step_mod_max_cycles = int(self.current_step_mod_max_cycles % self.max_cycles) # what the fuck torch... can't %=
         return self.world.observation(), self.world.global_reward(), self.current_step_mod_max_cycles == 0
     
-    @torch.jit.export
     def reset(self):
         self.world.reset()
         return self.world.observation()
@@ -251,14 +249,16 @@ class RotatorEnvironmentJit(torch.jit.ScriptModule):
 if __name__ == "__main__":
     #box = Box()
     
-    env = torch.jit.script(RotatorEnvironmentJit())
-    
+    #env = torch.jit.script(RotatorEnvironmentJit())
+    #a = env.observation_space
+    world = torch.jit.script(RotatorWorldJit(500,1,True))
     #breakpoint()
     import time
     print("Staring...")
     s = time.time()
-    for _ in range(50_000):
+    for _ in range(20_000):
         #world.step()
-        env.world.step()
+        world.step()
+        torch.cuda.synchronize()
         #env.reset()
     print(f"Time: {time.time() - s}")

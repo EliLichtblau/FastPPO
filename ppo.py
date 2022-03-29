@@ -12,6 +12,7 @@ from functools import partial
 
 from actor_critic import ActorCriticPolicy
 from env import RotatorEnvironment
+#from jit_compliant.jit_env import RotatorEnvironmentJit
 import time
 import math
 

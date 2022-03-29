@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from jit_env import RotatorEnvironmentJit
+from jit_env import RotatorEnvironmentJit, RotatorWorldJit
 from functools import partial
 from typing import Callable, Optional, Any, Type, Dict, Tuple
 from jit_utils import get_schedule_fn, Schedule, BaseFeaturesExtractor, FlattenExtractor, make_proba_distribution
@@ -11,7 +11,7 @@ from stable_baselines3.common.torch_layers import MlpExtractor
 class ActorCriticPolicy(torch.nn.Module):
     def __init__(
         self,
-        environment: Type[RotatorEnvironmentJit],
+        environment: RotatorEnvironmentJit,
         lr_schedule: Schedule,
         net_arch: Optional[Any] = None, # not sure what this is yet
         activation_fn: Type[torch.nn.Module] = torch.nn.Tanh,
@@ -28,8 +28,9 @@ class ActorCriticPolicy(torch.nn.Module):
         self.device = torch.device("cuda")
         self.lr_schedule = lr_schedule
 
-        self.environment = environment() # TODO: maybe make this more like accept a type?
+        self.environment = environment # TODO: maybe make this more like accept a type?
         self.observation_space = self.environment.observation_space
+
         self.action_space = self.environment.action_space
 
         # features extractor... exists for MLP extractor
@@ -57,7 +58,7 @@ class ActorCriticPolicy(torch.nn.Module):
         self.ortho_init = ortho_init
 
         # use passed features extractor class to make a features extractor
-        self.features_extractor = self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+        self.features_extractor = self.features_extractor_class(self.observation_space)#, **self.features_extractor_kwargs)
         self.features_dim = self.features_extractor.features_dim
 
          
@@ -97,8 +98,8 @@ class ActorCriticPolicy(torch.nn.Module):
 
         for module, gain in module_gains.items():
             module.apply(partial(self.init_weights, gain=gain))
-
-        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)
+        # TODO: fix this bs
+        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1))#, **self.optimizer_kwargs)
 
 
 
@@ -182,7 +183,7 @@ class ActorCriticPolicy(torch.nn.Module):
         latent_pi = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent_pi)
 
-    
+    @torch.jit.export
     def predict_values(self, obs: torch.Tensor) -> torch.Tensor:
         """
         Get the estimated values according to the current policy given the observations.
@@ -195,6 +196,7 @@ class ActorCriticPolicy(torch.nn.Module):
         return self.value_net(latent_vf)
 
 
+    #@torch.jit.export
     def set_training_mode(self, mode: bool) -> None:
         """
         Put the policy in either training or evaluation mode.
@@ -233,10 +235,19 @@ def collect_rollouts(actorcritic, last_obs):
 
 
 
+
+
 if __name__ == "__main__":
     #env = torch.jit.script(RotatorEnvironmentJit())
     lr_schedule: Schedule = get_schedule_fn(0.1)
-    m = torch.jit.script(ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule)) #20k -> 5.1 seconds with jit
+    #env = RotatorEnvironmentJit()
+    #breakpoint()
+    env = torch.jit.script(RotatorEnvironmentJit())
+    #env = RotatorEnvironmentJit()
+    actorcritic = ActorCriticPolicy(env, lr_schedule)
+    #a = env.observation_space
+    '''
+    m = torch.jit.script(ActorCriticPolicy(env, lr_schedule)) #20k -> 5.1 seconds with jit
     #m = ActorCriticPolicy(RotatorEnvironmentJit, lr_schedule) #20k -> 8.5
     print("Starting")
     obs = m.environment.world.observation()
@@ -248,6 +259,10 @@ if __name__ == "__main__":
     collect_rollouts(m, obs)
     print(f"Time: {time.time() - s}")
     obs = m.environment.world.observation()
+    
+    
+    '''
+    
 
 
 
